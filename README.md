@@ -114,6 +114,8 @@ Quy trình xây dựng hệ thống:
 
 Ví dụ tạo hệ thống từ dữ liệu mẫu:
 
+Phần tạo cây được thực hiện theo hướng bottom-up, tức là xây cây từ dưới lên. Đầu tiên hệ thống sắp xếp các `segment` theo `frame`, sau đó chia thành các nhóm nhỏ để tạo `leaf node`, mỗi `leaf` giữ các `record_indices` của segment gốc. Tiếp theo, nhiều `leaf` được gom lại thành `internal node`, mỗi `internal node` lưu `children` và khoảng `frame` bao phủ toàn bộ các node con. Quá trình này được lặp lại cho đến khi còn một node gốc `ROOT` cho video đó.
+
 ```python
 from chapter7_core import build_demo_system
 

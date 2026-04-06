@@ -115,15 +115,18 @@ class VideoRSTree:
         records: List[SegmentRecord],
         max_entries: int = 4,
     ) -> "VideoRSTree":
+        # Kiểm tra điều kiện tối thiểu để tạo cây.
         if max_entries < 2:
             raise ValueError("Yêu cầu max_entries >= 2.")
         if not record_pairs:
             raise ValueError("Không thể tạo RS-tree từ tập rỗng.")
 
+        # Bước 1: sắp xếp các segment theo thời gian.
         sorted_pairs = sorted(
             record_pairs,
             key=lambda item: (item[1].start_frame, item[1].end_frame, item[1].segment_id),
         )
+        # Bước 2: chia segment đã sắp xếp thành từng nhóm nhỏ để tạo leaf node.
         leaves: List[RSNode] = []
         for leaf_index, chunk_start in enumerate(range(0, len(sorted_pairs), max_entries), start=1):
             chunk = sorted_pairs[chunk_start : chunk_start + max_entries]
@@ -131,12 +134,15 @@ class VideoRSTree:
                 RSNode(
                     node_id=f"{video_id}-L{leaf_index}",
                     video_id=video_id,
+                    # Khoảng frame của leaf là khung bao tất cả record trong nhóm.
                     start_frame=min(record.start_frame for _, record in chunk),
                     end_frame=max(record.end_frame for _, record in chunk),
+                    # Leaf giữ chỉ số của các record gốc.
                     record_indices=[index for index, _ in chunk],
                 )
             )
 
+        # Bước 3: gom các leaf thành từng tầng internal node từ dưới lên trên.
         level = leaves
         depth = 1
         while len(level) > 1:
@@ -147,17 +153,22 @@ class VideoRSTree:
                     RSNode(
                         node_id=f"{video_id}-N{depth}-{group_index}",
                         video_id=video_id,
+                        # Internal node lấy khung bao frame của tất cả node con.
                         start_frame=min(node.start_frame for node in chunk),
                         end_frame=max(node.end_frame for node in chunk),
+                        # Internal node không giữ record trực tiếp, mà giữ danh sách con.
                         children=chunk,
                     )
                 )
+            # Chuyển lên tầng vừa tạo và tiếp tục gom cho đến khi còn 1 node.
             level = next_level
             depth += 1
 
+        # Node cuối cùng là gốc tạm thời của cây.
         root = level[0]
         if root.node_id.endswith("ROOT"):
             return cls(video_id, root, records, max_entries=max_entries, node_counter=len(level) + 1)
+        # Bước 4: bọc node gốc tạm thời thành ROOT chính thức của video.
         root = RSNode(
             node_id=f"{video_id}-ROOT",
             video_id=video_id,
@@ -165,13 +176,16 @@ class VideoRSTree:
             end_frame=root.end_frame,
             children=root.children if not root.is_leaf else [root],
         )
+        # Hoàn tất object cây và khởi tạo bộ đếm node cho các lần chèn sau.
         tree = cls(video_id, root, records, max_entries=max_entries)
         tree.node_counter = tree._count_nodes(tree.root) + 1
         return tree
 
     def query_range(self, start_frame: int, end_frame: int) -> tuple[Set[int], List[AccessTraceEntry]]:
+        # Cửa vào truy vấn theo frame range trên RS-tree của một video.
         matched_indices: Set[int] = set()
         trace: List[AccessTraceEntry] = []
+        # Bắt đầu duyệt cây từ root.
         self._query_node(self.root, start_frame, end_frame, matched_indices, trace)
         return matched_indices, trace
 
@@ -199,6 +213,7 @@ class VideoRSTree:
         matched_indices: Set[int],
         trace: List[AccessTraceEntry],
     ) -> None:
+        # Kiểm tra node hiện tại có giao với khoảng frame cần truy vấn hay không.
         accepted = node.overlaps(start_frame, end_frame)
         trace.append(
             AccessTraceEntry(
@@ -695,14 +710,17 @@ class VideoSegmentSystem:
         return QueryResult(self._triples_from_records(matched_records), matched_records, [])
 
     def FindObjectsInVideo(self, v: str, s: int, e: int) -> QueryResult:
+        # Truy vấn frame range trên cây của video v, rồi rút ra tập object xuất hiện.
         matched_records, trace = self._query_video_range(v, s, e)
         return QueryResult(sorted({record.object_name for record in matched_records}), matched_records, trace)
 
     def FindActivitiesInVideo(self, v: str, s: int, e: int) -> QueryResult:
+        # Truy vấn frame range trên cây của video v, rồi rút ra tập activity xuất hiện.
         matched_records, trace = self._query_video_range(v, s, e)
         return QueryResult(sorted({record.activity_name for record in matched_records}), matched_records, trace)
 
     def FindActivitiesAndPropsinVideo(self, v: str, s: int, e: int) -> QueryResult:
+        # Đi trên RS-tree trước, sau đó lấy activity và các thuộc tính activity của các record khớp.
         matched_records, trace = self._query_video_range(v, s, e)
         values = sorted(
             {
@@ -714,6 +732,7 @@ class VideoSegmentSystem:
         return QueryResult(values, matched_records, trace)
 
     def FindObjectsAndPropsinVideo(self, v: str, s: int, e: int) -> QueryResult:
+        # Đi trên RS-tree trước, sau đó lấy object và các thuộc tính object của các record khớp.
         matched_records, trace = self._query_video_range(v, s, e)
         values = sorted(
             {
@@ -785,9 +804,11 @@ class VideoSegmentSystem:
         start_frame: int,
         end_frame: int,
     ) -> tuple[List[SegmentRecord], List[AccessTraceEntry]]:
+        # Chọn đúng RS-tree của video đang được hỏi.
         tree = self.rs_trees.get(video_id)
         if tree is None:
             return [], []
+        # Dùng cây để lấy các record có khoảng frame giao với truy vấn.
         matched_indices, trace = tree.query_range(start_frame, end_frame)
         matched_records = [
             self.segment_table[index]
